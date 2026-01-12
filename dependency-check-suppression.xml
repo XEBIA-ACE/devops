@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OWASP Dependency-Check Suppression File
+  Service: User Management Service (SVC-001)
+
+  This file contains suppression rules for false positives in dependency vulnerability scans.
+  Each suppression should include:
+  - Detailed notes explaining why it's suppressed
+  - Expiration date for review
+  - Links to relevant CVE/issue trackers
+
+  Review this file quarterly and remove expired suppressions.
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+    <!-- Example suppression for false positive in test dependencies -->
+    <suppress until="2026-12-31Z">
+        <notes><![CDATA[
+            CVE-2023-XXXXX - False positive in H2 database used only for testing.
+            This vulnerability affects production deployments but we only use H2 in unit tests.
+            The production system uses PostgreSQL.
+            Review by: 2026-12-31
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/com\.h2database/h2@.*$</packageUrl>
+        <cve>CVE-2023-XXXXX</cve>
+    </suppress>
+
+    <!-- Example suppression for accepted risk -->
+    <suppress until="2026-06-30Z">
+        <notes><![CDATA[
+            CVE-2024-YYYYY - Known issue in Spring Boot Actuator.
+            Mitigated by: Network policies restricting actuator endpoints to internal traffic only.
+            Additional context: Management port (8081) is not exposed externally.
+            Tracking ticket: JIRA-1234
+            Review by: 2026-06-30
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework\.boot/spring\-boot\-actuator.*$</packageUrl>
+        <cve>CVE-2024-YYYYY</cve>
+    </suppress>
+
+    <!-- Suppress vulnerabilities in transitive dependencies with patches available -->
+    <suppress until="2026-03-31Z">
+        <notes><![CDATA[
+            CVE-2024-ZZZZZ - Vulnerability in transitive dependency.
+            Waiting for upstream library to update their dependency.
+            Tracking: GitHub issue #5678 in upstream project
+            Workaround: Input validation implemented at application layer
+            Review by: 2026-03-31
+        ]]></notes>
+        <gav regex="true">^com\.example:vulnerable-lib:.*$</gav>
+        <cve>CVE-2024-ZZZZZ</cve>
+    </suppress>
+
+    <!--
+      Template for new suppressions:
+
+      <suppress until="YYYY-MM-DDZ">
+          <notes><![CDATA[
+              CVE-YYYY-XXXXX - Description of why this is suppressed
+              Mitigation: How the risk is addressed
+              Tracking: Link to ticket/issue
+              Review by: When this should be re-evaluated
+          ]]></notes>
+          <packageUrl regex="true">^pkg:maven/group/artifact@version$</packageUrl>
+          OR
+          <gav regex="true">^group:artifact:version$</gav>
+          <cve>CVE-YYYY-XXXXX</cve>
+      </suppress>
+    -->
+
+</suppressions>
