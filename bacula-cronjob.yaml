@@ -1,0 +1,594 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backup
+  labels:
+    name: backup
+    purpose: bacula-backup-system
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bacula-backup
+  namespace: backup
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bacula-backup-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "persistentvolumeclaims", "persistentvolumes", "namespaces"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list", "patch"]
+- apiGroups: ["snapshot.storage.k8s.io"]
+  resources: ["volumesnapshots"]
+  verbs: ["create", "get", "list", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bacula-backup-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bacula-backup-role
+subjects:
+- kind: ServiceAccount
+  name: bacula-backup
+  namespace: backup
+
+---
+# Bacula Director Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bacula-director
+  namespace: backup
+  labels:
+    app: bacula-director
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bacula-director
+  template:
+    metadata:
+      labels:
+        app: bacula-director
+    spec:
+      serviceAccountName: bacula-backup
+      containers:
+      - name: director
+        image: baculasystems/bacula:latest
+        command: ["/opt/bacula/bin/bacula-dir", "-f", "-c", "/etc/bacula/bacula-dir.conf"]
+        ports:
+        - containerPort: 9101
+          name: director
+        volumeMounts:
+        - name: config
+          mountPath: /etc/bacula
+          readOnly: true
+        - name: pki-keys
+          mountPath: /etc/bacula/pki
+          readOnly: true
+        - name: tls-certs
+          mountPath: /etc/bacula/ssl
+          readOnly: true
+        - name: working-dir
+          mountPath: /var/lib/bacula
+        - name: scripts
+          mountPath: /opt/bacula/scripts
+        env:
+        - name: TZ
+          value: "UTC"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "echo 'status dir' | bconsole -c /etc/bacula/bconsole.conf"
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        readinessProbe:
+          tcpSocket:
+            port: 9101
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: bacula-config
+      - name: pki-keys
+        secret:
+          secretName: bacula-pki-master
+          defaultMode: 0400
+      - name: tls-certs
+        secret:
+          secretName: bacula-tls-certs
+          defaultMode: 0400
+      - name: working-dir
+        persistentVolumeClaim:
+          claimName: bacula-working-dir
+      - name: scripts
+        configMap:
+          name: bacula-scripts
+          defaultMode: 0755
+
+---
+# Bacula Storage Daemon (Azure) Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bacula-sd-azure
+  namespace: backup
+  labels:
+    app: bacula-sd-azure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bacula-sd-azure
+  template:
+    metadata:
+      labels:
+        app: bacula-sd-azure
+    spec:
+      serviceAccountName: bacula-backup
+      containers:
+      - name: storage-daemon
+        image: baculasystems/bacula:latest
+        command: ["/opt/bacula/bin/bacula-sd", "-f", "-c", "/etc/bacula/bacula-sd.conf"]
+        ports:
+        - containerPort: 9103
+          name: storage
+        volumeMounts:
+        - name: config
+          mountPath: /etc/bacula
+          readOnly: true
+        - name: tls-certs
+          mountPath: /etc/bacula/ssl
+          readOnly: true
+        - name: azure-storage
+          mountPath: /mnt/azure-blob
+        - name: spool-dir
+          mountPath: /var/spool/bacula
+        env:
+        - name: AZURE_STORAGE_ACCOUNT
+          valueFrom:
+            secretKeyRef:
+              name: azure-storage-credentials
+              key: account
+        - name: AZURE_STORAGE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: azure-storage-credentials
+              key: key
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+      volumes:
+      - name: config
+        configMap:
+          name: bacula-sd-azure-config
+      - name: tls-certs
+        secret:
+          secretName: bacula-tls-certs
+          defaultMode: 0400
+      - name: azure-storage
+        persistentVolumeClaim:
+          claimName: bacula-azure-storage
+      - name: spool-dir
+        emptyDir:
+          sizeLimit: 100Gi
+
+---
+# Bacula File Daemon DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: bacula-fd
+  namespace: backup
+  labels:
+    app: bacula-fd
+spec:
+  selector:
+    matchLabels:
+      app: bacula-fd
+  template:
+    metadata:
+      labels:
+        app: bacula-fd
+    spec:
+      serviceAccountName: bacula-backup
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: file-daemon
+        image: baculasystems/bacula:latest
+        command: ["/opt/bacula/bin/bacula-fd", "-f", "-c", "/etc/bacula/bacula-fd.conf"]
+        securityContext:
+          privileged: true
+        ports:
+        - containerPort: 9102
+          name: file-daemon
+        volumeMounts:
+        - name: config
+          mountPath: /etc/bacula
+          readOnly: true
+        - name: pki-keys
+          mountPath: /etc/bacula/pki
+          readOnly: true
+        - name: tls-certs
+          mountPath: /etc/bacula/ssl
+          readOnly: true
+        - name: backup-data
+          mountPath: /backup
+        - name: host-root
+          mountPath: /host
+          readOnly: true
+        - name: scripts
+          mountPath: /opt/bacula/scripts
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+      volumes:
+      - name: config
+        configMap:
+          name: bacula-fd-config
+      - name: pki-keys
+        secret:
+          secretName: bacula-pki-master
+          defaultMode: 0400
+      - name: tls-certs
+        secret:
+          secretName: bacula-tls-certs
+          defaultMode: 0400
+      - name: backup-data
+        persistentVolumeClaim:
+          claimName: bacula-backup-staging
+      - name: host-root
+        hostPath:
+          path: /
+      - name: scripts
+        configMap:
+          name: bacula-scripts
+          defaultMode: 0755
+
+---
+# CronJob for PostgreSQL Backup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: backup
+spec:
+  schedule: "0 2 * * 6"  # Weekly on Saturday at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          serviceAccountName: bacula-backup
+          restartPolicy: OnFailure
+          containers:
+          - name: postgres-backup
+            image: postgres:15
+            command:
+            - /bin/bash
+            - /scripts/postgres-backup.sh
+            - "Full"
+            env:
+            - name: PGHOST
+              value: "postgres-service.production.svc.cluster.local"
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            volumeMounts:
+            - name: backup-dir
+              mountPath: /backup
+            - name: scripts
+              mountPath: /scripts
+          volumes:
+          - name: backup-dir
+            persistentVolumeClaim:
+              claimName: bacula-backup-staging
+          - name: scripts
+            configMap:
+              name: bacula-scripts
+              defaultMode: 0755
+
+---
+# CronJob for MySQL Backup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-backup
+  namespace: backup
+spec:
+  schedule: "0 2 * * 6"  # Weekly on Saturday at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: mysql-backup
+        spec:
+          serviceAccountName: bacula-backup
+          restartPolicy: OnFailure
+          containers:
+          - name: mysql-backup
+            image: mysql:8.0
+            command:
+            - /bin/bash
+            - /scripts/mysql-backup.sh
+            - "Full"
+            env:
+            - name: MYSQL_HOST
+              value: "mysql-service.production.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: username
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: password
+            volumeMounts:
+            - name: backup-dir
+              mountPath: /backup
+            - name: scripts
+              mountPath: /scripts
+          volumes:
+          - name: backup-dir
+            persistentVolumeClaim:
+              claimName: bacula-backup-staging
+          - name: scripts
+            configMap:
+              name: bacula-scripts
+              defaultMode: 0755
+
+---
+# CronJob for etcd Backup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: etcd-backup
+  namespace: backup
+spec:
+  schedule: "0 1 * * 6"  # Weekly on Saturday at 1 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: etcd-backup
+        spec:
+          serviceAccountName: bacula-backup
+          restartPolicy: OnFailure
+          hostNetwork: true
+          containers:
+          - name: etcd-backup
+            image: bitnami/etcd:latest
+            command:
+            - /bin/bash
+            - /scripts/etcd-backup.sh
+            env:
+            - name: ETCDCTL_API
+              value: "3"
+            - name: ETCD_ENDPOINTS
+              value: "https://127.0.0.1:2379"
+            volumeMounts:
+            - name: backup-dir
+              mountPath: /backup
+            - name: scripts
+              mountPath: /scripts
+            - name: etcd-certs
+              mountPath: /etc/kubernetes/pki/etcd
+              readOnly: true
+            - name: kubeconfig
+              mountPath: /root/.kube
+              readOnly: true
+          volumes:
+          - name: backup-dir
+            persistentVolumeClaim:
+              claimName: bacula-backup-staging
+          - name: scripts
+            configMap:
+              name: bacula-scripts
+              defaultMode: 0755
+          - name: etcd-certs
+            hostPath:
+              path: /etc/kubernetes/pki/etcd
+          - name: kubeconfig
+            secret:
+              secretName: kubeconfig
+
+---
+# CronJob for Backup Verification
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-verification
+  namespace: backup
+spec:
+  schedule: "0 4 * * 0"  # Weekly on Sunday at 4 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: backup-verification
+        spec:
+          serviceAccountName: bacula-backup
+          restartPolicy: OnFailure
+          containers:
+          - name: verification
+            image: baculasystems/bacula:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              echo "run job=VerifyBackup yes" | bconsole -c /etc/bacula/bconsole.conf
+              /scripts/verify-backup-integrity.sh
+            volumeMounts:
+            - name: config
+              mountPath: /etc/bacula
+            - name: scripts
+              mountPath: /scripts
+            - name: restore-test
+              mountPath: /tmp/restore-test
+          volumes:
+          - name: config
+            configMap:
+              name: bacula-config
+          - name: scripts
+            configMap:
+              name: bacula-scripts
+              defaultMode: 0755
+          - name: restore-test
+            emptyDir:
+              sizeLimit: 10Gi
+
+---
+# PersistentVolumeClaims
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bacula-working-dir
+  namespace: backup
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: fast-ssd
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bacula-backup-staging
+  namespace: backup
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: nfs-storage
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bacula-azure-storage
+  namespace: backup
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti
+  storageClassName: azure-blob-storage
+
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: bacula-director
+  namespace: backup
+spec:
+  selector:
+    app: bacula-director
+  ports:
+  - port: 9101
+    targetPort: 9101
+    name: director
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bacula-sd-azure
+  namespace: backup
+spec:
+  selector:
+    app: bacula-sd-azure
+  ports:
+  - port: 9103
+    targetPort: 9103
+    name: storage
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bacula-fd-service
+  namespace: backup
+spec:
+  selector:
+    app: bacula-fd
+  ports:
+  - port: 9102
+    targetPort: 9102
+    name: file-daemon
+  type: ClusterIP
+  clusterIP: None  # Headless service

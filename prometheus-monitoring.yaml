@@ -1,0 +1,342 @@
+---
+# Prometheus ServiceMonitor for Bacula
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bacula-metrics
+  namespace: backup
+  labels:
+    app: bacula
+spec:
+  selector:
+    matchLabels:
+      app: bacula-exporter
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# Bacula Exporter Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bacula-exporter
+  namespace: backup
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bacula-exporter
+  template:
+    metadata:
+      labels:
+        app: bacula-exporter
+    spec:
+      containers:
+      - name: exporter
+        image: vlamug/bacula_exporter:latest
+        ports:
+        - containerPort: 9133
+          name: metrics
+        env:
+        - name: BACULA_DIRECTOR_HOST
+          value: "bacula-director"
+        - name: BACULA_DIRECTOR_PORT
+          value: "9101"
+        volumeMounts:
+        - name: bacula-config
+          mountPath: /etc/bacula
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: bacula-config
+        configMap:
+          name: bacula-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bacula-exporter
+  namespace: backup
+  labels:
+    app: bacula-exporter
+spec:
+  selector:
+    app: bacula-exporter
+  ports:
+  - port: 9133
+    targetPort: 9133
+    name: metrics
+
+---
+# PrometheusRule for Bacula Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: bacula-alerts
+  namespace: backup
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: bacula.backup
+    interval: 60s
+    rules:
+
+    # Backup job failure alert
+    - alert: BaculaBackupJobFailed
+      expr: bacula_job_status{status!="OK"} > 0
+      for: 5m
+      labels:
+        severity: critical
+        component: backup
+      annotations:
+        summary: "Bacula backup job failed"
+        description: "Backup job {{ $labels.job_name }} failed with status {{ $labels.status }}"
+
+    # No successful backup in 24 hours
+    - alert: BaculaNoRecentBackup
+      expr: (time() - bacula_backup_last_success_timestamp) > 86400
+      for: 1h
+      labels:
+        severity: critical
+        component: backup
+      annotations:
+        summary: "No successful backup in 24 hours"
+        description: "Job {{ $labels.job }} has not completed successfully for over 24 hours"
+
+    # Backup duration exceeding threshold
+    - alert: BaculaBackupDurationHigh
+      expr: bacula_job_duration_seconds > 21600  # 6 hours
+      for: 10m
+      labels:
+        severity: warning
+        component: backup
+      annotations:
+        summary: "Backup job taking too long"
+        description: "Job {{ $labels.job_name }} has been running for {{ $value }} seconds"
+
+    # Storage capacity warning
+    - alert: BaculaStorageCapacityLow
+      expr: bacula_storage_bytes_free / bacula_storage_bytes_total < 0.2
+      for: 30m
+      labels:
+        severity: warning
+        component: backup
+      annotations:
+        summary: "Backup storage capacity low"
+        description: "Storage {{ $labels.storage }} has less than 20% free space"
+
+    # Storage capacity critical
+    - alert: BaculaStorageCapacityCritical
+      expr: bacula_storage_bytes_free / bacula_storage_bytes_total < 0.1
+      for: 15m
+      labels:
+        severity: critical
+        component: backup
+      annotations:
+        summary: "Backup storage capacity critical"
+        description: "Storage {{ $labels.storage }} has less than 10% free space"
+
+    # Certificate expiration warning
+    - alert: BaculaTLSCertificateExpiringSoon
+      expr: (bacula_tls_certificate_expiry_timestamp - time()) < (30 * 24 * 3600)
+      for: 1h
+      labels:
+        severity: warning
+        component: backup
+      annotations:
+        summary: "Bacula TLS certificate expiring soon"
+        description: "Certificate {{ $labels.component }} expires in less than 30 days"
+
+    # RTO/RPO compliance
+    - alert: BaculaRTOExceeded
+      expr: bacula_restore_duration_seconds > 604800  # 1 week
+      for: 5m
+      labels:
+        severity: critical
+        component: backup
+      annotations:
+        summary: "Recovery Time Objective (RTO) exceeded"
+        description: "Restore operation took {{ $value }} seconds, exceeding RTO of 1 week"
+
+    # Backup size anomaly
+    - alert: BaculaBackupSizeAnomaly
+      expr: abs((bacula_backup_bytes - avg_over_time(bacula_backup_bytes[7d])) / avg_over_time(bacula_backup_bytes[7d])) > 0.5
+      for: 1h
+      labels:
+        severity: warning
+        component: backup
+      annotations:
+        summary: "Backup size anomaly detected"
+        description: "Backup size for {{ $labels.job }} deviated by more than 50% from 7-day average"
+
+    # Bacula director down
+    - alert: BaculaDirectorDown
+      expr: up{job="bacula-director"} == 0
+      for: 5m
+      labels:
+        severity: critical
+        component: backup
+      annotations:
+        summary: "Bacula Director is down"
+        description: "Bacula Director has been down for more than 5 minutes"
+
+    # Bacula storage daemon down
+    - alert: BaculaStorageDaemonDown
+      expr: up{job="bacula-sd"} == 0
+      for: 5m
+      labels:
+        severity: critical
+        component: backup
+      annotations:
+        summary: "Bacula Storage Daemon is down"
+        description: "Bacula Storage Daemon {{ $labels.instance }} has been down for more than 5 minutes"
+
+    # File daemon connectivity
+    - alert: BaculaFileDaemonUnreachable
+      expr: bacula_client_status{status="unreachable"} > 0
+      for: 15m
+      labels:
+        severity: warning
+        component: backup
+      annotations:
+        summary: "Bacula File Daemon unreachable"
+        description: "File Daemon {{ $labels.client }} is unreachable"
+
+    # Retention policy violations
+    - alert: BaculaRetentionPolicyViolation
+      expr: bacula_volume_retention_days < bacula_required_retention_days
+      for: 1h
+      labels:
+        severity: warning
+        component: backup
+      annotations:
+        summary: "Backup retention policy violation"
+        description: "Volume {{ $labels.volume }} retention is below required policy"
+
+---
+# Grafana Dashboard ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bacula-grafana-dashboard
+  namespace: backup
+  labels:
+    grafana_dashboard: "1"
+data:
+  bacula-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Bacula Backup System",
+        "panels": [
+          {
+            "title": "Backup Job Status",
+            "targets": [
+              {
+                "expr": "sum by (job_name, status) (bacula_job_status)"
+              }
+            ],
+            "type": "stat"
+          },
+          {
+            "title": "Backup Success Rate (24h)",
+            "targets": [
+              {
+                "expr": "sum(bacula_job_status{status=\"OK\"}) / sum(bacula_job_status) * 100"
+              }
+            ],
+            "type": "gauge"
+          },
+          {
+            "title": "Backup Duration",
+            "targets": [
+              {
+                "expr": "bacula_job_duration_seconds"
+              }
+            ],
+            "type": "graph"
+          },
+          {
+            "title": "Backup Size Trend",
+            "targets": [
+              {
+                "expr": "bacula_backup_bytes"
+              }
+            ],
+            "type": "graph"
+          },
+          {
+            "title": "Storage Capacity",
+            "targets": [
+              {
+                "expr": "bacula_storage_bytes_free / bacula_storage_bytes_total * 100"
+              }
+            ],
+            "type": "gauge"
+          },
+          {
+            "title": "Recent Backup Jobs",
+            "targets": [
+              {
+                "expr": "bacula_backup_last_success_timestamp"
+              }
+            ],
+            "type": "table"
+          }
+        ]
+      }
+    }
+
+---
+# AlertManager Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-bacula-config
+  namespace: backup
+data:
+  bacula-alerts.yaml: |
+    route:
+      group_by: ['alertname', 'component']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: 'bacula-alerts'
+      routes:
+      - match:
+          severity: critical
+        receiver: 'pagerduty'
+        continue: true
+      - match:
+          severity: warning
+        receiver: 'slack'
+
+    receivers:
+    - name: 'bacula-alerts'
+      email_configs:
+      - to: 'ops-team@company.com'
+        from: 'alertmanager@company.com'
+        smarthost: 'smtp.company.com:587'
+        headers:
+          Subject: 'Bacula Backup Alert: {{ .GroupLabels.alertname }}'
+
+    - name: 'pagerduty'
+      pagerduty_configs:
+      - service_key: '<PAGERDUTY_SERVICE_KEY>'
+        description: '{{ .GroupLabels.alertname }}: {{ .CommonAnnotations.summary }}'
+
+    - name: 'slack'
+      slack_configs:
+      - api_url: '<SLACK_WEBHOOK_URL>'
+        channel: '#backup-alerts'
+        title: 'Bacula Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
