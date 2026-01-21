@@ -1,0 +1,222 @@
+{
+  "version": "1.0",
+  "description": "AWS Resource Tagging Policy for Cost Optimization and Governance",
+  "effective_date": "2026-01-21",
+
+  "mandatory_tags": {
+    "Environment": {
+      "description": "Deployment environment for the resource",
+      "allowed_values": ["production", "staging", "development", "test", "sandbox"],
+      "validation_pattern": "^(production|staging|development|test|sandbox)$",
+      "case_sensitive": false,
+      "applies_to": ["all"]
+    },
+    "Application": {
+      "description": "Application or service name that uses this resource",
+      "validation_pattern": "^[a-zA-Z0-9-_]+$",
+      "max_length": 64,
+      "applies_to": ["all"],
+      "examples": ["user-service", "payment-api", "analytics-pipeline"]
+    },
+    "CostCenter": {
+      "description": "Cost center or department code for billing allocation",
+      "validation_pattern": "^[A-Z0-9-]+$",
+      "max_length": 32,
+      "applies_to": ["all"],
+      "examples": ["ENG-001", "SALES-002", "OPS-003"]
+    },
+    "Owner": {
+      "description": "Email of the team or individual responsible for this resource",
+      "validation_pattern": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+      "applies_to": ["all"],
+      "examples": ["devops@company.com", "data-team@company.com"]
+    },
+    "ManagedBy": {
+      "description": "How this resource is managed",
+      "allowed_values": ["terraform", "cloudformation", "manual", "cdk", "pulumi"],
+      "validation_pattern": "^(terraform|cloudformation|manual|cdk|pulumi)$",
+      "case_sensitive": false,
+      "applies_to": ["all"]
+    }
+  },
+
+  "recommended_tags": {
+    "Project": {
+      "description": "Project name or initiative",
+      "validation_pattern": "^[a-zA-Z0-9-_\\s]+$",
+      "max_length": 64,
+      "applies_to": ["all"],
+      "examples": ["customer-portal-v2", "mobile-app-launch"]
+    },
+    "DataClassification": {
+      "description": "Data sensitivity level",
+      "allowed_values": ["public", "internal", "confidential", "restricted"],
+      "applies_to": ["dynamodb", "s3", "rds", "elasticache"],
+      "default": "internal"
+    },
+    "BackupPolicy": {
+      "description": "Backup frequency and retention requirements",
+      "allowed_values": ["none", "daily", "weekly", "monthly"],
+      "applies_to": ["dynamodb", "rds", "elasticache"],
+      "default": "daily"
+    },
+    "AutoShutdown": {
+      "description": "Whether resource can be automatically stopped during non-business hours",
+      "allowed_values": ["true", "false"],
+      "applies_to": ["ec2", "rds", "elasticache"],
+      "default": "false"
+    },
+    "ExpirationDate": {
+      "description": "Date when resource can be deleted (for temporary resources)",
+      "validation_pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "applies_to": ["all"],
+      "examples": ["2026-12-31"]
+    },
+    "Compliance": {
+      "description": "Compliance requirements",
+      "allowed_values": ["none", "hipaa", "pci-dss", "sox", "gdpr"],
+      "applies_to": ["all"],
+      "default": "none"
+    }
+  },
+
+  "service_specific_tags": {
+    "dynamodb": {
+      "CapacityMode": {
+        "description": "DynamoDB capacity mode for cost tracking",
+        "allowed_values": ["provisioned", "on-demand"],
+        "auto_tag": true
+      },
+      "HasGSI": {
+        "description": "Whether table has Global Secondary Indexes",
+        "allowed_values": ["true", "false"],
+        "auto_tag": true
+      }
+    },
+    "elasticache": {
+      "Engine": {
+        "description": "Cache engine type",
+        "allowed_values": ["redis", "memcached"],
+        "auto_tag": true
+      },
+      "NodeCount": {
+        "description": "Number of cache nodes",
+        "validation_pattern": "^\\d+$",
+        "auto_tag": true
+      }
+    }
+  },
+
+  "enforcement_rules": {
+    "on_resource_creation": {
+      "action": "deny",
+      "missing_mandatory_tags": true,
+      "invalid_tag_values": true,
+      "notification": {
+        "send_alert": true,
+        "recipients": ["cloud-ops@company.com"]
+      }
+    },
+    "on_existing_resources": {
+      "action": "report",
+      "schedule": "daily",
+      "auto_remediate": false,
+      "grace_period_days": 7
+    }
+  },
+
+  "exemptions": {
+    "services": ["cloudtrail", "config"],
+    "reason": "AWS managed services that don't require tagging",
+    "approved_by": "Cloud Architecture Team"
+  },
+
+  "cost_allocation_tags": [
+    "Environment",
+    "Application",
+    "CostCenter",
+    "Owner",
+    "Project"
+  ],
+
+  "reporting": {
+    "daily_compliance_report": true,
+    "weekly_cost_by_tag": true,
+    "monthly_untagged_resources": true,
+    "alert_on_untagged_resources": true,
+    "alert_threshold_days": 1
+  },
+
+  "automation": {
+    "auto_tag_new_resources": true,
+    "auto_tag_sources": {
+      "from_vpc": ["Environment"],
+      "from_subnet": ["Environment"],
+      "from_iam_user": ["Owner"],
+      "from_cloudformation_stack": ["ManagedBy", "Project"]
+    },
+    "tag_propagation": {
+      "dynamodb_to_gsi": true,
+      "elasticache_to_nodes": true
+    }
+  },
+
+  "best_practices": [
+    "Always tag resources immediately upon creation",
+    "Use lowercase for tag values to maintain consistency",
+    "Keep tag values descriptive but concise",
+    "Review and update tags quarterly",
+    "Use cost allocation tags to track expenses",
+    "Document tag usage in project README files",
+    "Include tagging requirements in IaC templates",
+    "Train team members on tagging standards"
+  ],
+
+  "common_patterns": {
+    "development_environment": {
+      "Environment": "development",
+      "AutoShutdown": "true",
+      "BackupPolicy": "none",
+      "DataClassification": "internal"
+    },
+    "production_environment": {
+      "Environment": "production",
+      "AutoShutdown": "false",
+      "BackupPolicy": "daily",
+      "DataClassification": "confidential"
+    },
+    "temporary_testing": {
+      "Environment": "test",
+      "AutoShutdown": "true",
+      "ExpirationDate": "2026-02-28",
+      "BackupPolicy": "none"
+    }
+  },
+
+  "tag_key_restrictions": {
+    "max_length": 128,
+    "min_length": 1,
+    "allowed_characters": "^[a-zA-Z0-9+\\-=._:/@]+$",
+    "case_sensitive": true,
+    "reserved_prefixes": ["aws:", "AWS:"]
+  },
+
+  "tag_value_restrictions": {
+    "max_length": 256,
+    "min_length": 0,
+    "allowed_characters": "^[a-zA-Z0-9+\\-=._:/@\\s]+$",
+    "case_sensitive": false
+  },
+
+  "review_schedule": {
+    "policy_review": "quarterly",
+    "tag_cleanup": "monthly",
+    "compliance_audit": "weekly"
+  },
+
+  "contacts": {
+    "policy_owner": "cloud-architecture@company.com",
+    "enforcement_team": "cloud-ops@company.com",
+    "exceptions_approval": "cloud-architecture-lead@company.com"
+  }
+}

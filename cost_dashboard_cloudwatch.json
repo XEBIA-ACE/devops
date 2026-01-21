@@ -1,0 +1,177 @@
+{
+  "dashboard_name": "AWS-Cost-Optimization-Dashboard",
+  "description": "Comprehensive cost monitoring dashboard for DynamoDB and ElastiCache",
+  "widgets": [
+    {
+      "type": "metric",
+      "properties": {
+        "title": "Total Estimated Charges",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/Billing", "EstimatedCharges", {"stat": "Maximum"}]
+        ],
+        "period": 21600,
+        "stat": "Maximum",
+        "yAxis": {
+          "left": {
+            "label": "USD"
+          }
+        },
+        "width": 12,
+        "height": 6
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "DynamoDB Consumed Read/Write Capacity",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/DynamoDB", "ConsumedReadCapacityUnits", {"stat": "Sum", "label": "Read Capacity"}],
+          [".", "ConsumedWriteCapacityUnits", {"stat": "Sum", "label": "Write Capacity"}]
+        ],
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {
+          "left": {
+            "label": "Units"
+          }
+        },
+        "width": 12,
+        "height": 6
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "DynamoDB Throttled Requests",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/DynamoDB", "ReadThrottleEvents", {"stat": "Sum", "label": "Read Throttles"}],
+          [".", "WriteThrottleEvents", {"stat": "Sum", "label": "Write Throttles"}]
+        ],
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {
+          "left": {
+            "label": "Count"
+          }
+        },
+        "width": 12,
+        "height": 6
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "ElastiCache CPU Utilization",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/ElastiCache", "CPUUtilization", {"stat": "Average"}]
+        ],
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {
+          "left": {
+            "label": "Percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "width": 12,
+        "height": 6
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "ElastiCache Memory Utilization",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/ElastiCache", "DatabaseMemoryUsagePercentage", {"stat": "Average", "label": "Memory Usage"}]
+        ],
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {
+          "left": {
+            "label": "Percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "width": 12,
+        "height": 6
+      }
+    },
+    {
+      "type": "metric",
+      "properties": {
+        "title": "ElastiCache Cache Hit Rate",
+        "region": "us-east-1",
+        "metrics": [
+          [{"expression": "m1/(m1+m2)*100", "label": "Hit Rate %"}],
+          ["AWS/ElastiCache", "CacheHits", {"stat": "Sum", "id": "m1", "visible": false}],
+          [".", "CacheMisses", {"stat": "Sum", "id": "m2", "visible": false}]
+        ],
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {
+          "left": {
+            "label": "Percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "width": 12,
+        "height": 6
+      }
+    },
+    {
+      "type": "log",
+      "properties": {
+        "title": "Cost Optimization Actions Log",
+        "query": "SOURCE '/aws/lambda/cost-optimization'\n| fields @timestamp, @message\n| sort @timestamp desc\n| limit 20",
+        "region": "us-east-1",
+        "width": 24,
+        "height": 6
+      }
+    }
+  ],
+  "deployment": {
+    "method": "aws_cli",
+    "commands": [
+      "# Create the dashboard using AWS CLI",
+      "aws cloudwatch put-dashboard \\",
+      "  --dashboard-name AWS-Cost-Optimization-Dashboard \\",
+      "  --dashboard-body file://cost_dashboard_cloudwatch.json",
+      "",
+      "# Or using Python boto3:",
+      "import boto3",
+      "import json",
+      "",
+      "cloudwatch = boto3.client('cloudwatch')",
+      "with open('cost_dashboard_cloudwatch.json', 'r') as f:",
+      "    dashboard_body = json.load(f)",
+      "",
+      "cloudwatch.put_dashboard(",
+      "    DashboardName='AWS-Cost-Optimization-Dashboard',",
+      "    DashboardBody=json.dumps(dashboard_body)",
+      ")"
+    ]
+  },
+  "customization": {
+    "notes": [
+      "Replace 'TableName' dimension values with your actual table names",
+      "Replace 'CacheClusterId' dimension values with your actual cluster IDs",
+      "Adjust period values based on your monitoring granularity needs",
+      "Add additional widgets for specific tables or clusters as needed",
+      "Consider using CloudWatch Metric Math for advanced calculations"
+    ],
+    "cost": "CloudWatch dashboards are free for up to 3 dashboards with up to 50 metrics each. Additional dashboards cost $3/month per dashboard.",
+    "alternatives": [
+      "Grafana with CloudWatch data source (open source, self-hosted)",
+      "AWS Cost Explorer (built-in, no additional cost)",
+      "Third-party tools: Datadog, New Relic, CloudHealth"
+    ]
+  }
+}
