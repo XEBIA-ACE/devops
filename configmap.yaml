@@ -1,0 +1,144 @@
+---
+# ConfigMap for HAProxy Ingress Controller configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-ingress-config
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+data:
+  # HAProxy global settings
+  ssl-redirect: "true"
+  ssl-ciphers: "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384"
+  ssl-options: "no-sslv3 no-tlsv10 no-tlsv11"
+  timeout-client: "50s"
+  timeout-server: "50s"
+  timeout-connect: "5s"
+  timeout-http-request: "10s"
+  timeout-queue: "5s"
+  max-connections: "10000"
+
+  # Connection settings
+  backend-check-interval: "2s"
+  backend-server-slots-increment: "10"
+
+  # Load balancing algorithm
+  balance-algorithm: "roundrobin"
+
+  # Health check settings
+  health-check-interval: "2s"
+  health-check-fall: "3"
+  health-check-rise: "2"
+
+  # Rate limiting
+  rate-limit-status-code: "429"
+
+  # Security headers
+  hsts: "true"
+  hsts-max-age: "31536000"
+  hsts-include-subdomains: "true"
+  hsts-preload: "true"
+
+  # Logging
+  syslog-endpoint: "stdout"
+  syslog-format: "rfc5424"
+  log-format-upstream: '{"time":"%t","client":"%ci","method":"%HM","request":"%HU","status":%ST,"bytes":%B,"duration":%Tt}'
+
+---
+# ConfigMap for data processing application
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: data-processing-config
+  namespace: data-processing
+  labels:
+    app: data-processing
+data:
+  # Application configuration
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+
+  # Data processing settings
+  BATCH_SIZE: "1000"
+  WORKER_THREADS: "4"
+  MAX_RETRIES: "3"
+  RETRY_DELAY: "5"
+
+  # Performance tuning
+  POOL_SIZE: "10"
+  QUEUE_SIZE: "1000"
+  TIMEOUT: "30"
+
+  # Monitoring
+  METRICS_ENABLED: "true"
+  METRICS_PORT: "9090"
+  HEALTH_CHECK_PATH: "/health"
+  READINESS_CHECK_PATH: "/ready"
+
+  # Feature flags
+  ENABLE_CACHING: "true"
+  CACHE_TTL: "300"
+
+  # Application config file
+  app-config.yaml: |
+    server:
+      port: 8080
+      gracefulShutdownTimeout: 30s
+
+    processing:
+      batchSize: 1000
+      workerThreads: 4
+      maxRetries: 3
+      retryDelay: 5s
+
+    observability:
+      metrics:
+        enabled: true
+        port: 9090
+        path: /metrics
+      tracing:
+        enabled: true
+        samplingRate: 0.1
+      logging:
+        level: info
+        format: json
+
+    cache:
+      enabled: true
+      ttl: 5m
+      maxSize: 1000
+
+    healthcheck:
+      liveness:
+        path: /health
+        port: 8080
+      readiness:
+        path: /ready
+        port: 8080
+
+---
+# ConfigMap for HAProxy custom configuration snippets
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-custom-config
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+data:
+  # Custom HAProxy frontend configuration
+  frontend-config.cfg: |
+    # Custom rate limiting per IP
+    stick-table type ip size 100k expire 30s store http_req_rate(10s)
+    http-request track-sc0 src
+    http-request deny deny_status 429 if { sc_http_req_rate(0) gt 100 }
+
+    # Custom security headers
+    http-response set-header X-Frame-Options SAMEORIGIN
+    http-response set-header X-Content-Type-Options nosniff
+    http-response set-header X-XSS-Protection "1; mode=block"
+    http-response set-header Referrer-Policy "strict-origin-when-cross-origin"

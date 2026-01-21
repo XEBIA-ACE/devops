@@ -1,0 +1,465 @@
+---
+# Default deny all ingress traffic policy
+# Best practice: Start with deny-all, then explicitly allow required traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: data-processing
+  labels:
+    app: data-processing
+  annotations:
+    description: "Default deny all ingress traffic - explicit allow rules needed"
+spec:
+  podSelector: {}  # Apply to all pods in namespace
+  policyTypes:
+  - Ingress
+
+---
+# Default deny all egress traffic policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: data-processing
+  labels:
+    app: data-processing
+  annotations:
+    description: "Default deny all egress traffic - explicit allow rules needed"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+
+---
+# Network Policy for HAProxy Ingress Controller
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: haproxy-ingress-netpol
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+  annotations:
+    description: "Allow ingress from internet and egress to backend services"
+spec:
+  podSelector:
+    matchLabels:
+      app: haproxy-ingress
+      component: controller
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  # Ingress rules - allow traffic from internet
+  ingress:
+  # Allow HTTP traffic from anywhere
+  - from:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32  # Block AWS metadata service
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+
+  # Allow health checks from Kubernetes
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 1042  # Health check port
+
+  # Allow metrics scraping from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - protocol: TCP
+      port: 9101  # Metrics port
+
+  # Egress rules
+  egress:
+  # Allow egress to backend application pods
+  - to:
+    - podSelector:
+        matchLabels:
+          app: data-processing
+          component: worker
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  # Allow egress to default backend
+  - to:
+    - podSelector:
+        matchLabels:
+          app: default-backend
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+
+  # Allow egress to Kubernetes API server for ingress resource discovery
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          component: kube-apiserver
+    ports:
+    - protocol: TCP
+      port: 443
+
+  # Allow egress to external services (if needed)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8      # Internal networks
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 169.254.169.254/32  # AWS metadata
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# Network Policy for data processing application
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-processing-app-netpol
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: worker
+  annotations:
+    description: "Allow traffic from ingress and to required services"
+spec:
+  podSelector:
+    matchLabels:
+      app: data-processing
+      component: worker
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  # Allow traffic from HAProxy ingress controller
+  - from:
+    - podSelector:
+        matchLabels:
+          app: haproxy-ingress
+          component: controller
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  # Allow traffic from same application (pod-to-pod)
+  - from:
+    - podSelector:
+        matchLabels:
+          app: data-processing
+          component: worker
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  # Allow metrics scraping from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+
+  # Allow health checks from Kubernetes
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  egress:
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+
+  # Allow egress to database (example: PostgreSQL)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: database
+      podSelector:
+        matchLabels:
+          app: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+
+  # Allow egress to Redis cache (example)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: cache
+      podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+
+  # Allow egress to Kafka (example)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kafka
+      podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+
+  # Allow egress to external APIs (HTTPS only)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32  # Block metadata service
+    ports:
+    - protocol: TCP
+      port: 443
+
+  # Allow egress to specific external services by IP (if needed)
+  # - to:
+  #   - ipBlock:
+  #       cidr: 203.0.113.0/24  # Replace with actual external service IP
+  #   ports:
+  #   - protocol: TCP
+  #     port: 443
+
+---
+# Network Policy for default backend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-backend-netpol
+  namespace: data-processing
+  labels:
+    app: default-backend
+spec:
+  podSelector:
+    matchLabels:
+      app: default-backend
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  # Allow traffic from HAProxy ingress controller only
+  - from:
+    - podSelector:
+        matchLabels:
+          app: haproxy-ingress
+          component: controller
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  egress:
+  # Allow DNS resolution only
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+# Network Policy to allow monitoring namespace access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring
+  namespace: data-processing
+  labels:
+    app: data-processing
+  annotations:
+    description: "Allow Prometheus to scrape metrics from all pods"
+spec:
+  podSelector: {}  # Apply to all pods
+
+  policyTypes:
+  - Ingress
+
+  ingress:
+  # Allow metrics scraping from Prometheus
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+    - protocol: TCP
+      port: 9101
+
+---
+# Network Policy for health checks from Kubernetes control plane
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-health-checks
+  namespace: data-processing
+  labels:
+    app: data-processing
+  annotations:
+    description: "Allow health checks from Kubernetes control plane"
+spec:
+  podSelector: {}  # Apply to all pods
+
+  policyTypes:
+  - Ingress
+
+  ingress:
+  # Allow health checks from kube-system namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 1042
+
+---
+# Egress Network Policy for external HTTPS access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-external-https
+  namespace: data-processing
+  labels:
+    app: data-processing
+  annotations:
+    description: "Allow HTTPS egress to external services"
+spec:
+  podSelector:
+    matchLabels:
+      allow-external-https: "true"  # Only pods with this label
+
+  policyTypes:
+  - Egress
+
+  egress:
+  # Allow HTTPS to internet
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 169.254.169.254/32
+    ports:
+    - protocol: TCP
+      port: 443
+
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+# Example: Cilium Network Policy for Layer 7 (HTTP) filtering
+# Requires Cilium CNI
+# apiVersion: cilium.io/v2
+# kind: CiliumNetworkPolicy
+# metadata:
+#   name: haproxy-l7-policy
+#   namespace: data-processing
+# spec:
+#   endpointSelector:
+#     matchLabels:
+#       app: haproxy-ingress
+#   ingress:
+#   - fromEndpoints:
+#     - matchLabels:
+#         any:key: any:value
+#     toPorts:
+#     - ports:
+#       - port: "80"
+#         protocol: TCP
+#       - port: "443"
+#         protocol: TCP
+#       rules:
+#         http:
+#         - method: "GET|POST|PUT|DELETE"
+#           path: "/.*"
+#   egress:
+#   - toEndpoints:
+#     - matchLabels:
+#         app: data-processing
+#     toPorts:
+#     - ports:
+#       - port: "8080"
+#         protocol: TCP
+#       rules:
+#         http:
+#         - method: "GET|POST"
+#           path: "/api/.*"

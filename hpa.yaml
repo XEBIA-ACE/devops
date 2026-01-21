@@ -1,0 +1,320 @@
+---
+# Horizontal Pod Autoscaler for HAProxy Ingress Controller
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: haproxy-ingress-hpa
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+  annotations:
+    description: "HPA for HAProxy Ingress Controller based on CPU and memory"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: haproxy-ingress-controller
+
+  # Scaling boundaries
+  minReplicas: 3
+  maxReplicas: 10
+
+  # Scaling behavior configuration
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+      - type: Percent
+        value: 50  # Scale down max 50% of current pods
+        periodSeconds: 60
+      - type: Pods
+        value: 2  # Or max 2 pods
+        periodSeconds: 60
+      selectPolicy: Min  # Use the policy that scales down the least
+
+    scaleUp:
+      stabilizationWindowSeconds: 60  # Wait 1 minute before scaling up
+      policies:
+      - type: Percent
+        value: 100  # Scale up max 100% of current pods
+        periodSeconds: 30
+      - type: Pods
+        value: 4  # Or max 4 pods
+        periodSeconds: 30
+      selectPolicy: Max  # Use the policy that scales up the most
+
+  # Metrics for autoscaling
+  metrics:
+  # CPU utilization target
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70  # Target 70% CPU utilization
+
+  # Memory utilization target
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80  # Target 80% memory utilization
+
+  # Custom metric: Request rate (requires Prometheus Adapter)
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "1000"  # Scale when avg requests per pod exceeds 1000/s
+
+  # Custom metric: Connection count
+  - type: Pods
+    pods:
+      metric:
+        name: haproxy_active_connections
+      target:
+        type: AverageValue
+        averageValue: "500"  # Scale when avg connections per pod exceeds 500
+
+---
+# Horizontal Pod Autoscaler for data processing application
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: data-processing-app-hpa
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: worker
+  annotations:
+    description: "HPA for data processing application with custom metrics"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: data-processing-app
+
+  minReplicas: 3
+  maxReplicas: 20
+
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # Wait 10 minutes before scaling down (longer for data processing)
+      policies:
+      - type: Percent
+        value: 25  # Scale down max 25% of current pods
+        periodSeconds: 120
+      - type: Pods
+        value: 1  # Or max 1 pod at a time
+        periodSeconds: 120
+      selectPolicy: Min
+
+    scaleUp:
+      stabilizationWindowSeconds: 30  # Quick scale up for spikes
+      policies:
+      - type: Percent
+        value: 100  # Double the pods quickly
+        periodSeconds: 30
+      - type: Pods
+        value: 5  # Or add up to 5 pods
+        periodSeconds: 30
+      selectPolicy: Max
+
+  metrics:
+  # CPU utilization
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+
+  # Memory utilization
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 85
+
+  # Custom metric: Queue depth (requires Prometheus Adapter)
+  - type: Pods
+    pods:
+      metric:
+        name: job_queue_depth
+      target:
+        type: AverageValue
+        averageValue: "100"  # Scale when avg queue depth per pod exceeds 100
+
+  # Custom metric: Processing rate
+  - type: Pods
+    pods:
+      metric:
+        name: jobs_processed_per_minute
+      target:
+        type: AverageValue
+        averageValue: "50"  # Scale to maintain 50 jobs/min per pod
+
+---
+# Vertical Pod Autoscaler for data processing application (optional)
+# Provides resource recommendations - can be used alongside HPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: data-processing-app-vpa
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: worker
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: data-processing-app
+
+  # Update mode: Off (recommendations only), Initial (on pod creation), Auto (live updates)
+  updatePolicy:
+    updateMode: "Off"  # Use "Off" with HPA to avoid conflicts, only get recommendations
+
+  # Resource policy - define min/max boundaries
+  resourcePolicy:
+    containerPolicies:
+    - containerName: data-processor
+      minAllowed:
+        cpu: 500m
+        memory: 1Gi
+      maxAllowed:
+        cpu: 4000m
+        memory: 8Gi
+      controlledResources:
+      - cpu
+      - memory
+      # Scaling mode for each resource
+      mode: Auto
+
+---
+# KEDA ScaledObject for event-driven autoscaling (alternative to HPA)
+# Requires KEDA operator to be installed
+# Uncomment and configure if using event-driven scaling
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: data-processing-app-scaledobject
+#   namespace: data-processing
+#   labels:
+#     app: data-processing
+# spec:
+#   scaleTargetRef:
+#     name: data-processing-app
+#   minReplicaCount: 3
+#   maxReplicaCount: 50
+#   pollingInterval: 30
+#   cooldownPeriod: 300
+#
+#   triggers:
+#   # Scale based on Kafka lag
+#   - type: kafka
+#     metadata:
+#       bootstrapServers: kafka.kafka.svc.cluster.local:9092
+#       consumerGroup: data-processing-group
+#       topic: data-events
+#       lagThreshold: "100"
+#
+#   # Scale based on RabbitMQ queue length
+#   - type: rabbitmq
+#     metadata:
+#       host: amqp://rabbitmq.rabbitmq.svc.cluster.local:5672
+#       queueName: data-processing-queue
+#       queueLength: "50"
+#
+#   # Scale based on AWS SQS queue length
+#   - type: aws-sqs-queue
+#     metadata:
+#       queueURL: https://sqs.us-east-1.amazonaws.com/123456789/data-processing
+#       queueLength: "100"
+#       awsRegion: us-east-1
+#
+#   # Scale based on Prometheus metrics
+#   - type: prometheus
+#     metadata:
+#       serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+#       metricName: job_queue_depth
+#       threshold: "100"
+#       query: avg(job_queue_depth{namespace="data-processing"})
+#
+#   # Scale based on CPU (similar to HPA)
+#   - type: cpu
+#     metricType: Utilization
+#     metadata:
+#       value: "75"
+#
+#   # Scale based on memory
+#   - type: memory
+#     metricType: Utilization
+#     metadata:
+#       value: "85"
+#
+#   # Scale based on cron schedule
+#   - type: cron
+#     metadata:
+#       timezone: America/New_York
+#       start: 0 8 * * *  # Scale up at 8 AM
+#       end: 0 18 * * *    # Scale down at 6 PM
+#       desiredReplicas: "10"
+
+---
+# ConfigMap for custom metrics configuration (Prometheus Adapter)
+# This enables HPA to use custom Prometheus metrics
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-config
+  namespace: monitoring
+  labels:
+    app: prometheus-adapter
+data:
+  config.yaml: |
+    rules:
+    # HAProxy metrics
+    - seriesQuery: 'haproxy_frontend_http_requests_total{namespace="data-processing"}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^(.*)_total$"
+        as: "http_requests_per_second"
+      metricsQuery: 'rate(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    - seriesQuery: 'haproxy_frontend_current_sessions{namespace="data-processing"}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        as: "haproxy_active_connections"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    # Application metrics
+    - seriesQuery: 'job_queue_depth{namespace="data-processing"}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        as: "job_queue_depth"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    - seriesQuery: 'jobs_processed_total{namespace="data-processing"}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^(.*)_total$"
+        as: "jobs_processed_per_minute"
+      metricsQuery: 'rate(<<.Series>>{<<.LabelMatchers>>}[1m]) * 60'

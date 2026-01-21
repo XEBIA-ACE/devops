@@ -1,0 +1,200 @@
+---
+# Kustomization file for data processing application
+# This file orchestrates all Kubernetes manifests and allows for environment-specific customization
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Metadata
+metadata:
+  name: data-processing
+  annotations:
+    description: "Production-ready data processing deployment with HAProxy ingress"
+
+# Namespace where all resources will be created
+namespace: data-processing
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: data-processing
+  app.kubernetes.io/part-of: data-platform
+  app.kubernetes.io/managed-by: kustomize
+  environment: production
+
+# Common annotations applied to all resources
+commonAnnotations:
+  owner: platform-team@example.com
+  documentation: https://docs.example.com/data-processing
+  version: "1.0.0"
+
+# Resources to include (in order of dependency)
+resources:
+  # Core namespace and RBAC
+  - namespace.yaml
+  - rbac.yaml
+
+  # Configuration and secrets
+  - configmap.yaml
+  - secrets.yaml
+
+  # Storage (PVs, PVCs would go here if not using HostPath)
+  # - storage.yaml
+
+  # Application deployments
+  - deployment.yaml
+  - service.yaml
+
+  # Ingress and networking
+  - ingress.yaml
+  - network-policy.yaml
+
+  # Autoscaling and availability
+  - hpa.yaml
+  - pdb.yaml
+
+# ConfigMap generator for dynamic configuration
+configMapGenerator:
+  - name: app-version-config
+    namespace: data-processing
+    literals:
+      - VERSION=1.0.0
+      - BUILD_DATE=2026-01-21
+      - GIT_COMMIT=abc123
+    options:
+      disableNameSuffixHash: false  # Add hash suffix to trigger rolling updates
+
+# Secret generator (for non-sensitive defaults, use External Secrets for actual secrets)
+secretGenerator:
+  - name: app-defaults
+    namespace: data-processing
+    literals:
+      - default-key=default-value
+    type: Opaque
+    options:
+      disableNameSuffixHash: false
+
+# Images to use (allows easy image updates)
+images:
+  - name: haproxytech/kubernetes-ingress
+    newName: haproxytech/kubernetes-ingress
+    newTag: 1.10.0
+
+  - name: your-registry.example.com/data-processing
+    newName: your-registry.example.com/data-processing
+    newTag: 1.0.0
+
+  - name: gcr.io/google_containers/defaultbackend-amd64
+    newName: gcr.io/google_containers/defaultbackend-amd64
+    newTag: "1.5"
+
+# Replicas (can be overridden per environment)
+replicas:
+  - name: haproxy-ingress-controller
+    count: 3
+  - name: data-processing-app
+    count: 3
+  - name: default-backend
+    count: 2
+
+# JSON patches for complex modifications
+patches:
+  # Patch to add priority class to HAProxy deployment
+  - target:
+      kind: Deployment
+      name: haproxy-ingress-controller
+    patch: |-
+      - op: add
+        path: /spec/template/spec/priorityClassName
+        value: high-priority
+
+  # Patch to add priority class to application deployment
+  - target:
+      kind: Deployment
+      name: data-processing-app
+    patch: |-
+      - op: add
+        path: /spec/template/spec/priorityClassName
+        value: medium-priority
+
+  # Patch to add monitoring labels
+  - target:
+      kind: Service
+      labelSelector: "app.kubernetes.io/name=data-processing"
+    patch: |-
+      - op: add
+        path: /metadata/labels/monitoring
+        value: "true"
+
+# Strategic merge patches (alternative to JSON patches)
+patchesStrategicMerge:
+  # Example overlay patch file (create this file for environment-specific changes)
+  # - deployment-patch.yaml
+
+# Vars for cross-resource references (legacy, prefer replacements)
+# vars:
+#   - name: NAMESPACE
+#     objref:
+#       kind: Namespace
+#       name: data-processing
+#       apiVersion: v1
+#     fieldref:
+#       fieldpath: metadata.name
+
+# Replacements for cross-resource references (new style)
+replacements:
+  - source:
+      kind: Namespace
+      name: data-processing
+      fieldPath: metadata.name
+    targets:
+      - select:
+          kind: Service
+        fieldPaths:
+          - metadata.namespace
+
+# Resource name prefix (optional)
+# namePrefix: prod-
+
+# Resource name suffix (optional)
+# nameSuffix: -v1
+
+# Generator options
+generatorOptions:
+  disableNameSuffixHash: false  # Add hash to generated resources
+  labels:
+    generated-by: kustomize
+  annotations:
+    generated-date: "2026-01-21"
+
+# Build metadata
+buildMetadata:
+  - managedByLabel
+  - originAnnotations
+
+---
+# Example overlay structure for different environments
+# Directory structure:
+#
+# base/
+#   ├── kustomization.yaml (this file)
+#   ├── namespace.yaml
+#   ├── rbac.yaml
+#   ├── configmap.yaml
+#   ├── secrets.yaml
+#   ├── deployment.yaml
+#   ├── service.yaml
+#   ├── ingress.yaml
+#   ├── hpa.yaml
+#   ├── pdb.yaml
+#   └── network-policy.yaml
+#
+# overlays/
+#   ├── development/
+#   │   ├── kustomization.yaml
+#   │   ├── deployment-patch.yaml
+#   │   └── ingress-patch.yaml
+#   ├── staging/
+#   │   ├── kustomization.yaml
+#   │   └── deployment-patch.yaml
+#   └── production/
+#       ├── kustomization.yaml
+#       └── deployment-patch.yaml

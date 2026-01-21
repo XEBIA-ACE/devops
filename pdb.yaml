@@ -1,0 +1,114 @@
+---
+# Pod Disruption Budget for HAProxy Ingress Controller
+# Ensures high availability during voluntary disruptions (node drains, upgrades)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: haproxy-ingress-pdb
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+  annotations:
+    description: "PDB to maintain availability during voluntary disruptions"
+spec:
+  # Selector to identify pods
+  selector:
+    matchLabels:
+      app: haproxy-ingress
+      component: controller
+
+  # Option 1: Minimum number of pods that must remain available
+  minAvailable: 2
+
+  # Option 2: Maximum number of pods that can be unavailable (alternative to minAvailable)
+  # maxUnavailable: 1
+
+  # Unhealthy pod eviction policy (Kubernetes 1.26+)
+  unhealthyPodEvictionPolicy: IfHealthyBudget
+
+---
+# Pod Disruption Budget for data processing application
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: data-processing-app-pdb
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: worker
+  annotations:
+    description: "PDB to ensure processing capacity during disruptions"
+spec:
+  selector:
+    matchLabels:
+      app: data-processing
+      component: worker
+
+  # Use percentage to scale with HPA
+  # Keep at least 75% of pods available
+  minAvailable: 75%
+
+  # Alternative: Allow up to 25% of pods to be unavailable
+  # maxUnavailable: 25%
+
+  unhealthyPodEvictionPolicy: IfHealthyBudget
+
+---
+# Pod Disruption Budget for default backend
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: default-backend-pdb
+  namespace: data-processing
+  labels:
+    app: default-backend
+spec:
+  selector:
+    matchLabels:
+      app: default-backend
+
+  # Keep at least 1 pod available
+  minAvailable: 1
+
+  unhealthyPodEvictionPolicy: IfHealthyBudget
+
+---
+# Priority Class for critical workloads
+# Ensures HAProxy ingress pods are prioritized over other workloads during resource contention
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: high-priority
+  labels:
+    app: data-processing
+  annotations:
+    description: "High priority for critical infrastructure components"
+value: 1000000  # Higher value = higher priority (max is 1000000000 for system-critical)
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "This priority class should be used for critical infrastructure components like ingress controllers"
+
+---
+# Priority Class for application workloads
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: medium-priority
+  labels:
+    app: data-processing
+value: 500000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "This priority class should be used for application workloads"
+
+---
+# Example: Using PriorityClass in Deployment
+# Add this to the deployment spec.template.spec section:
+#
+# spec:
+#   template:
+#     spec:
+#       priorityClassName: high-priority  # For HAProxy ingress controller
+#       # or
+#       priorityClassName: medium-priority  # For application pods

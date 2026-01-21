@@ -1,0 +1,222 @@
+---
+# Service for HAProxy Ingress Controller (LoadBalancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-ingress
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+  annotations:
+    # Cloud provider specific annotations (AWS example)
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "60"
+    # Preserve client source IP
+    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
+    # Health check settings
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "5"
+    service.beta.kubernetes.io/aws-load-balancer-healthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-unhealthy-threshold: "2"
+    # DNS and logging
+    external-dns.alpha.kubernetes.io/hostname: "data-processing.example.com"
+    service.beta.kubernetes.io/aws-load-balancer-access-log-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-access-log-s3-bucket-name: "my-lb-logs"
+    # Prometheus monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9101"
+spec:
+  type: LoadBalancer
+  # Preserve client source IP
+  externalTrafficPolicy: Local
+  # Session affinity for sticky sessions
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
+  selector:
+    app: haproxy-ingress
+    component: controller
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+  # Optionally expose stats port (use with caution in production)
+  # - name: stats
+  #   port: 1024
+  #   targetPort: stat
+  #   protocol: TCP
+
+---
+# Service for HAProxy Ingress Controller Stats (Internal)
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-ingress-stats
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9101"
+spec:
+  type: ClusterIP
+  selector:
+    app: haproxy-ingress
+    component: controller
+  ports:
+  - name: stats
+    port: 1024
+    targetPort: stat
+    protocol: TCP
+  - name: metrics
+    port: 9101
+    targetPort: exporter
+    protocol: TCP
+
+---
+# Service for data processing application
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-processing-app
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: worker
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    description: "Data processing application service"
+spec:
+  type: ClusterIP
+  selector:
+    app: data-processing
+    component: worker
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+    protocol: TCP
+  # Session affinity if needed
+  sessionAffinity: None
+
+---
+# Headless service for StatefulSet-like operations (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-processing-app-headless
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: worker
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  selector:
+    app: data-processing
+    component: worker
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  publishNotReadyAddresses: false
+
+---
+# Default backend service for HAProxy (handles 404s)
+apiVersion: v1
+kind: Service
+metadata:
+  name: default-backend
+  namespace: data-processing
+  labels:
+    app: default-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: default-backend
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+
+---
+# Default backend deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: default-backend
+  namespace: data-processing
+  labels:
+    app: default-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: default-backend
+  template:
+    metadata:
+      labels:
+        app: default-backend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: default-backend
+        image: gcr.io/google_containers/defaultbackend-amd64:1.5
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 20Mi
+          limits:
+            cpu: 50m
+            memory: 50Mi
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+      terminationGracePeriodSeconds: 30

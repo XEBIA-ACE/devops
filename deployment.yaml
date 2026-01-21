@@ -1,0 +1,511 @@
+---
+# Deployment for HAProxy Ingress Controller
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-ingress-controller
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+    version: "1.0.0"
+  annotations:
+    description: "HAProxy Ingress Controller for data processing workloads"
+spec:
+  replicas: 3  # High availability with 3 replicas
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # Allow 1 extra pod during updates
+      maxUnavailable: 1  # Allow 1 pod to be unavailable during updates
+  selector:
+    matchLabels:
+      app: haproxy-ingress
+      component: controller
+  template:
+    metadata:
+      labels:
+        app: haproxy-ingress
+        component: controller
+        version: "1.0.0"
+      annotations:
+        # Prometheus scraping annotations
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+        prometheus.io/path: "/metrics"
+        # Force pod restart on config change
+        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+    spec:
+      serviceAccountName: haproxy-ingress-controller
+      automountServiceAccountToken: true
+
+      # Security context at pod level
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Topology spread for zone distribution
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: haproxy-ingress
+            component: controller
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: haproxy-ingress
+            component: controller
+
+      # Anti-affinity to spread pods across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: haproxy-ingress
+                  component: controller
+              topologyKey: kubernetes.io/hostname
+
+      # Init container to prepare configuration
+      initContainers:
+      - name: init-config
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "Initializing HAProxy configuration..."
+          mkdir -p /var/lib/haproxy
+          chown -R 1000:1000 /var/lib/haproxy
+          echo "Initialization complete"
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: haproxy-data
+          mountPath: /var/lib/haproxy
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+
+      containers:
+      - name: haproxy-ingress
+        image: haproxytech/kubernetes-ingress:1.10.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - --configmap=data-processing/haproxy-ingress-config
+        - --ingress.class=haproxy
+        - --default-backend-service=data-processing/default-backend
+        - --default-ssl-certificate=data-processing/haproxy-tls-secret
+
+        # Security context at container level
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE  # Required to bind to ports 80/443
+          readOnlyRootFilesystem: true
+
+        # Resource management for guaranteed QoS
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+
+        # Startup probe for slow-starting application
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 1042
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 12  # 60 seconds total
+
+        # Liveness probe to restart unhealthy pods
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 1042
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        # Readiness probe to control traffic routing
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 1042
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+        - name: https
+          containerPort: 443
+          protocol: TCP
+        - name: stat
+          containerPort: 1024
+          protocol: TCP
+        - name: healthz
+          containerPort: 1042
+          protocol: TCP
+        - name: metrics
+          containerPort: 9101
+          protocol: TCP
+
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+
+        volumeMounts:
+        - name: haproxy-data
+          mountPath: /var/lib/haproxy
+        - name: tmp
+          mountPath: /tmp
+        - name: custom-config
+          mountPath: /etc/haproxy/custom
+          readOnly: true
+
+      # Sidecar for exporting metrics (optional - HAProxy has built-in metrics)
+      - name: prometheus-exporter
+        image: prom/haproxy-exporter:v0.15.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - --haproxy.scrape-uri=http://localhost:1024/stats;csv
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        ports:
+        - name: exporter
+          containerPort: 9101
+          protocol: TCP
+
+      volumes:
+      - name: haproxy-data
+        hostPath:
+          path: /var/lib/haproxy-ingress
+          type: DirectoryOrCreate
+      - name: tmp
+        emptyDir: {}
+      - name: custom-config
+        configMap:
+          name: haproxy-custom-config
+
+      # DNS settings for faster name resolution
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+
+      # Graceful termination
+      terminationGracePeriodSeconds: 60
+
+---
+# Deployment for data processing application
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-processing-app
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: worker
+    version: "1.0.0"
+  annotations:
+    description: "Data processing application worker pods"
+spec:
+  replicas: 3
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: data-processing
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: data-processing
+        component: worker
+        version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+    spec:
+      serviceAccountName: data-processing-app
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: data-processing
+            component: worker
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: data-processing
+                  component: worker
+              topologyKey: kubernetes.io/hostname
+
+      initContainers:
+      - name: init-storage
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "Preparing storage directories..."
+          mkdir -p /data/input /data/output /data/temp
+          chown -R 10000:10000 /data
+          echo "Storage initialization complete"
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+
+      containers:
+      - name: data-processor
+        image: your-registry.example.com/data-processing:1.0.0  # Replace with actual image
+        imagePullPolicy: IfNotPresent
+
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 20  # 100 seconds total
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+
+        env:
+        - name: APP_NAME
+          value: "data-processing"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # Load from ConfigMap
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: data-processing-config
+              key: LOG_LEVEL
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: data-processing-config
+              key: BATCH_SIZE
+        # Load from Secret
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: data-processing-secrets
+              key: database-password
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: data-processing-secrets
+              key: api-key
+
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+        - name: config-volume
+          mountPath: /etc/config
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /var/cache
+
+      volumes:
+      - name: data-storage
+        hostPath:
+          path: /mnt/data-processing
+          type: DirectoryOrCreate
+      - name: config-volume
+        configMap:
+          name: data-processing-config
+          items:
+          - key: app-config.yaml
+            path: config.yaml
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: cache
+        emptyDir:
+          sizeLimit: 2Gi
+
+      terminationGracePeriodSeconds: 60
+
+      # Node selector for specific node pools (optional)
+      nodeSelector:
+        workload-type: data-processing
+
+      # Tolerations for tainted nodes (optional)
+      tolerations:
+      - key: "workload-type"
+        operator: "Equal"
+        value: "data-processing"
+        effect: "NoSchedule"

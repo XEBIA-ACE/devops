@@ -1,0 +1,174 @@
+---
+# Service Account for HAProxy Ingress Controller with minimal required permissions
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: haproxy-ingress-controller
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: controller
+  annotations:
+    description: "Service account for HAProxy ingress controller"
+
+---
+# Service Account for data processing application
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: data-processing-app
+  namespace: data-processing
+  labels:
+    app: data-processing
+  annotations:
+    description: "Service account for data processing application pods"
+
+---
+# ClusterRole for HAProxy Ingress Controller (requires cluster-wide permissions)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: haproxy-ingress-controller
+  labels:
+    app: haproxy-ingress
+rules:
+# Read ingress resources
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  - ingressclasses
+  verbs:
+  - get
+  - list
+  - watch
+# Update ingress status
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses/status
+  verbs:
+  - update
+# Read services and endpoints for backend discovery
+- apiGroups:
+  - ""
+  resources:
+  - services
+  - endpoints
+  verbs:
+  - get
+  - list
+  - watch
+# Read secrets for TLS certificates
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+# Read configmaps for configuration
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+# Read pods for health checking
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+# Create events for monitoring
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+
+---
+# ClusterRoleBinding for HAProxy Ingress Controller
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: haproxy-ingress-controller
+  labels:
+    app: haproxy-ingress
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: haproxy-ingress-controller
+subjects:
+- kind: ServiceAccount
+  name: haproxy-ingress-controller
+  namespace: data-processing
+
+---
+# Role for data processing application (namespace-scoped)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: data-processing-app
+  namespace: data-processing
+  labels:
+    app: data-processing
+rules:
+# Read configmaps for application configuration
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+# Read secrets for credentials
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+# Create events for monitoring
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+# Read pods for self-discovery (if needed)
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+
+---
+# RoleBinding for data processing application
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: data-processing-app
+  namespace: data-processing
+  labels:
+    app: data-processing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: data-processing-app
+subjects:
+- kind: ServiceAccount
+  name: data-processing-app
+  namespace: data-processing

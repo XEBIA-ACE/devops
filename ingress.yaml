@@ -1,0 +1,255 @@
+---
+# Ingress resource for data processing application with TLS
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: data-processing-ingress
+  namespace: data-processing
+  labels:
+    app: data-processing
+    component: ingress
+  annotations:
+    # Ingress class
+    kubernetes.io/ingress.class: "haproxy"
+
+    # TLS and SSL settings
+    ingress.kubernetes.io/ssl-redirect: "true"
+    ingress.kubernetes.io/force-ssl-redirect: "true"
+    haproxy.org/ssl-redirect: "true"
+    haproxy.org/ssl-redirect-code: "301"
+
+    # Security headers
+    haproxy.org/response-set-header: |
+      Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+      X-Frame-Options "SAMEORIGIN"
+      X-Content-Type-Options "nosniff"
+      X-XSS-Protection "1; mode=block"
+      Referrer-Policy "strict-origin-when-cross-origin"
+      Permissions-Policy "geolocation=(self), microphone=()"
+
+    # Rate limiting
+    haproxy.org/rate-limit: "100"
+    haproxy.org/rate-limit-period: "10s"
+    haproxy.org/rate-limit-status-code: "429"
+
+    # Connection settings
+    haproxy.org/timeout-http-request: "10s"
+    haproxy.org/timeout-connect: "5s"
+    haproxy.org/timeout-client: "50s"
+    haproxy.org/timeout-server: "50s"
+
+    # Load balancing
+    haproxy.org/load-balance: "roundrobin"
+    haproxy.org/check: "enabled"
+    haproxy.org/check-interval: "2s"
+
+    # Request/Response modifications
+    haproxy.org/request-set-header: |
+      X-Forwarded-Proto https
+      X-Real-IP %[src]
+
+    # Backend server settings
+    haproxy.org/server-ssl: "false"
+    haproxy.org/backend-config-snippet: |
+      http-reuse safe
+      option http-keep-alive
+      option forwardfor
+
+    # CORS settings (if needed)
+    haproxy.org/cors-enable: "true"
+    haproxy.org/cors-allow-origin: "https://example.com"
+    haproxy.org/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    haproxy.org/cors-allow-headers: "Content-Type, Authorization, X-Requested-With"
+    haproxy.org/cors-max-age: "86400"
+
+    # Logging and monitoring
+    haproxy.org/request-capture: "X-Request-ID len 64"
+    haproxy.org/response-capture: "X-Response-Time len 32"
+
+    # External DNS
+    external-dns.alpha.kubernetes.io/hostname: "data-processing.example.com"
+    external-dns.alpha.kubernetes.io/ttl: "300"
+
+    # Cert-manager (if using cert-manager for TLS)
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    cert-manager.io/acme-challenge-type: "http01"
+
+spec:
+  # IngressClassName (modern alternative to annotation)
+  ingressClassName: haproxy
+
+  # TLS configuration
+  tls:
+  - hosts:
+    - data-processing.example.com
+    - api.data-processing.example.com
+    secretName: haproxy-tls-secret
+
+  # Routing rules
+  rules:
+  # Main application domain
+  - host: data-processing.example.com
+    http:
+      paths:
+      # API endpoints
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: data-processing-app
+            port:
+              number: 8080
+
+      # Health check endpoint (bypass auth)
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: data-processing-app
+            port:
+              number: 8080
+
+      # Metrics endpoint (internal only, restrict via NetworkPolicy)
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: data-processing-app
+            port:
+              number: 9090
+
+      # Default path
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: data-processing-app
+            port:
+              number: 8080
+
+  # API subdomain
+  - host: api.data-processing.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: data-processing-app
+            port:
+              number: 8080
+
+---
+# Additional Ingress for HAProxy stats (internal monitoring)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: haproxy-stats-ingress
+  namespace: data-processing
+  labels:
+    app: haproxy-ingress
+    component: stats
+  annotations:
+    kubernetes.io/ingress.class: "haproxy"
+    haproxy.org/whitelist: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"  # Internal networks only
+    haproxy.org/auth-type: "basic-auth"
+    haproxy.org/auth-secret: "haproxy-stats-auth"
+spec:
+  ingressClassName: haproxy
+  tls:
+  - hosts:
+    - stats.data-processing.internal.example.com
+    secretName: haproxy-tls-secret
+  rules:
+  - host: stats.data-processing.internal.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: haproxy-ingress-stats
+            port:
+              number: 1024
+
+---
+# IngressClass definition
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: haproxy
+  labels:
+    app: haproxy-ingress
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: haproxy.org/ingress-controller
+
+---
+# Certificate resource (if using cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: data-processing-tls
+  namespace: data-processing
+  labels:
+    app: data-processing
+spec:
+  secretName: haproxy-tls-secret
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+  - data-processing.example.com
+  - api.data-processing.example.com
+  - "*.data-processing.example.com"
+  privateKey:
+    algorithm: RSA
+    size: 4096
+    rotationPolicy: Always
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days
+  usages:
+  - digital signature
+  - key encipherment
+  - server auth
+
+---
+# ClusterIssuer for Let's Encrypt (if using cert-manager)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app: cert-manager
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: platform-team@example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - http01:
+        ingress:
+          class: haproxy
+    - dns01:
+        route53:
+          region: us-east-1
+          # IAM role for DNS validation (use IRSA on AWS)
+          # accessKeyID: <access-key-id>
+          # secretAccessKeySecretRef:
+          #   name: route53-credentials
+          #   key: secret-access-key
+
+---
+# Secret for HAProxy stats authentication (create manually or via External Secrets)
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: haproxy-stats-auth
+#   namespace: data-processing
+# type: Opaque
+# data:
+#   # htpasswd format: username:$apr1$encrypted$password
+#   # Generate with: htpasswd -nb admin password | base64
+#   auth: <base64-encoded-htpasswd>
