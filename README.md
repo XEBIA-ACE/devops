@@ -1,463 +1,516 @@
-# User Management Service - CI/CD Pipeline
-## Service ID: SVC-001
+# Authentication Service
 
-Production-grade GitLab CI/CD pipeline for the User Management Service, a core service responsible for user authentication, authorization, profile management, and accessibility preferences in the medication management system.
+A production-ready, enterprise-grade authentication and authorization service built with Spring Boot, supporting OAuth 2.0, JWT, Auth0, and Keycloak integration.
 
----
+## Features
 
-## 📋 Overview
+- **JWT Authentication**: Secure token-based authentication with access and refresh tokens
+- **OAuth 2.0 Integration**: Support for Auth0 and Keycloak identity providers
+- **Role-Based Access Control (RBAC)**: Fine-grained permissions and role management
+- **User Management**: Complete user lifecycle management with email verification
+- **Security**: BCrypt password hashing, account locking, failed login tracking
+- **Audit Logging**: Comprehensive audit trail of all authentication events
+- **Caching**: Redis-based caching for improved performance
+- **Monitoring**: Prometheus metrics and Grafana dashboards
+- **API Documentation**: OpenAPI/Swagger documentation
+- **Production Ready**: Docker support, health checks, structured logging
 
-This repository contains a comprehensive GitLab CI/CD pipeline that automates:
-- Building Spring Boot applications
-- Running unit and integration tests
-- Static code analysis (SonarCloud)
-- Security scanning (Snyk, Trivy, OWASP Dependency Check)
-- Docker image creation and registry push
-- Deployment to Google Kubernetes Engine (GKE)
-- Post-deployment smoke testing
-- Failure notifications
+## Technology Stack
 
----
+- **Framework**: Spring Boot 3.2.2
+- **Language**: Java 17
+- **Security**: Spring Security, OAuth 2.0, JWT
+- **Database**: PostgreSQL with Flyway migrations
+- **Cache**: Redis
+- **Identity Providers**: Auth0, Keycloak
+- **Monitoring**: Prometheus, Grafana, Spring Actuator
+- **Documentation**: Springdoc OpenAPI
+- **Testing**: JUnit 5, Mockito, TestContainers
+- **Build**: Maven
+- **Containerization**: Docker, Docker Compose
 
-## 🏗️ Architecture
+## Architecture
 
-**Technology Stack:**
-- **Application Framework:** Spring Boot
-- **Authentication:** OAuth 2.0/OpenID Connect, JWT
-- **Database:** PostgreSQL
-- **Cache:** Redis (session caching)
-- **Message Bus:** Event Bus (Kafka/RabbitMQ)
-- **Container Orchestration:** Google Kubernetes Engine (GKE)
-- **CI/CD:** GitLab CI/CD
-
-**Service Dependencies:**
-1. PostgreSQL Database
-2. Redis Cache
-3. Event Bus
-
----
-
-## 📁 Repository Structure
+### Clean Architecture Layers
 
 ```
-.
-├── .gitlab-ci.yml                      # Main CI/CD pipeline configuration
-├── Dockerfile                          # Multi-stage Docker build
-├── dependency-check-suppression.xml    # OWASP suppression rules
-├── CICD-SETUP-GUIDE.md                # Comprehensive setup documentation
-├── GITLAB-VARIABLES-QUICK-REF.md      # Quick reference for CI/CD variables
-├── README.md                          # This file
-│
-├── k8s/                               # Kubernetes manifests
-│   ├── deployment.yaml                # Deployment configuration
-│   ├── service.yaml                   # Service definitions
-│   └── hpa.yaml                       # Horizontal Pod Autoscaler
-│
-├── src/                               # Application source code
-│   ├── main/
-│   │   ├── java/
-│   │   └── resources/
-│   └── test/
-│
-└── pom.xml                            # Maven project configuration
+┌─────────────────────────────────────────────────────┐
+│              API Layer (Controllers)                 │
+│  - AuthController, HealthController                  │
+└─────────────────────────────────────────────────────┘
+                         ▼
+┌─────────────────────────────────────────────────────┐
+│           Business Logic (Services)                  │
+│  - AuthService, AuditService                         │
+└─────────────────────────────────────────────────────┘
+                         ▼
+┌─────────────────────────────────────────────────────┐
+│          Data Access (Repositories)                  │
+│  - UserRepository, RoleRepository, etc.              │
+└─────────────────────────────────────────────────────┘
+                         ▼
+┌─────────────────────────────────────────────────────┐
+│              Database (PostgreSQL)                   │
+└─────────────────────────────────────────────────────┘
 ```
 
----
+### Security Flow
 
-## 🚀 Quick Start
+```
+Client Request → JWT Filter → Spring Security → Controller → Service → Repository → Database
+                     ↓
+              Token Validation
+                     ↓
+           SecurityContext Setup
+```
+
+## Getting Started
 
 ### Prerequisites
 
-1. **GitLab Project Setup**
-   - GitLab repository with admin access
-   - GitLab Runner with Docker executor
-   - Container Registry enabled
+- Java 17 or higher
+- Maven 3.9+
+- Docker and Docker Compose (for containerized setup)
+- PostgreSQL 16+ (if running locally)
+- Redis 7+ (if running locally)
 
-2. **External Services**
-   - PostgreSQL database (accessible from CI/CD)
-   - Redis cache instance
-   - Event Bus (Kafka/RabbitMQ)
-   - Google Kubernetes Engine cluster
+### Quick Start with Docker
 
-3. **Third-Party Accounts**
-   - SonarCloud account and project
-   - Snyk account and organization
-   - Slack workspace (for notifications)
-
-### Step 1: Configure CI/CD Variables
-
-See **[GITLAB-VARIABLES-QUICK-REF.md](GITLAB-VARIABLES-QUICK-REF.md)** for the complete checklist.
-
-**Critical Variables (15 required):**
+1. Clone the repository:
 ```bash
-# Database
-DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
-
-# Redis
-REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
-
-# Security
-JWT_SECRET, OAUTH_CLIENT_SECRET
-
-# GKE
-GKE_SERVICE_ACCOUNT_KEY, GCP_PROJECT_ID, GKE_CLUSTER_NAME, GKE_REGION
-
-# Deployment
-DEPLOYMENT_URL
+git clone <repository-url>
+cd auth-service
 ```
 
-Navigate to: **Settings > CI/CD > Variables** and add all required variables.
-
-### Step 2: Set Up Kubernetes Manifests
-
-Copy the Kubernetes manifests from the setup guide to your `k8s/` directory:
-- `k8s/deployment.yaml`
-- `k8s/service.yaml`
-- `k8s/hpa.yaml`
-
-Customize resource limits, replica counts, and environment-specific values.
-
-### Step 3: Create Dockerfile
-
-Use the provided multi-stage Dockerfile in the repository root. It's optimized for:
-- Layered Spring Boot builds
-- Minimal image size
-- Non-root user execution
-- Built-in health checks
-
-### Step 4: Configure GKE Service Account
-
+2. Copy the environment file and configure:
 ```bash
-# Create service account
-gcloud iam service-accounts create gitlab-ci-deployer \
-  --display-name="GitLab CI Deployer"
-
-# Grant permissions
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:gitlab-ci-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/container.developer"
-
-# Create key and encode
-gcloud iam service-accounts keys create key.json \
-  --iam-account=gitlab-ci-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com
-
-cat key.json | base64 -w 0 > key.json.b64
+cp .env.example .env
+# Edit .env with your configuration
 ```
 
-Add the contents of `key.json.b64` to GitLab variable `GKE_SERVICE_ACCOUNT_KEY`.
-
-### Step 5: Push to Repository
-
+3. Start all services:
 ```bash
-git add .
-git commit -m "Add CI/CD pipeline configuration"
-git push origin develop
+docker-compose up -d
 ```
 
-The pipeline will automatically trigger!
+4. Access the application:
+- API: http://localhost:8080
+- Swagger UI: http://localhost:8080/swagger-ui.html
+- Health Check: http://localhost:8080/actuator/health
 
----
+### Local Development Setup
 
-## 🔄 Pipeline Stages
+1. Start dependencies:
+```bash
+docker-compose up -d postgres redis
+```
 
-The pipeline consists of 9 stages:
+2. Configure environment variables:
+```bash
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_NAME=auth_service
+export DB_USERNAME=auth_user
+export DB_PASSWORD=changeme
+export REDIS_HOST=localhost
+export JWT_SECRET=your-256-bit-secret-key-change-this-in-production
+```
 
-### 1. **Validate** (2 jobs)
-- `validate:dependencies` - Validates Maven project structure
-- `validate:code-format` - Checks code formatting standards
+3. Build and run:
+```bash
+mvn clean install
+mvn spring-boot:run
+```
 
-### 2. **Build** (1 job)
-- `build:compile` - Compiles Spring Boot application
-- Caches `.m2/repository` for faster subsequent builds
+### Running with Keycloak
 
-### 3. **Test** (2 jobs)
-- `test:unit` - Runs JUnit tests with JaCoCo coverage
-- `test:integration` - Runs integration tests with Testcontainers
-- Generates JUnit XML reports for GitLab visualization
+```bash
+docker-compose --profile keycloak up -d
+```
 
-### 4. **Analyze** (1 job)
-- `analyze:sonarcloud` - Static code analysis and quality gates
+Access Keycloak at http://localhost:8180 (admin/admin)
 
-### 5. **Security** (2 jobs)
-- `security:snyk` - Dependency vulnerability scanning
-- `security:dependency-check` - OWASP vulnerability analysis
+### Running with Monitoring
 
-### 6. **Package** (3 jobs)
-- `package:jar` - Creates executable JAR artifact
-- `package:docker` - Builds Docker image with multiple tags
-- `security:trivy` - Container image vulnerability scan
+```bash
+docker-compose --profile monitoring up -d
+```
 
-**Image Tags:**
-- `${CI_COMMIT_SHORT_SHA}` - Git commit SHA
-- `${SERVICE_ID}-${BUILD_VERSION}` - Service ID + version (e.g., `SVC-001-1.2.3`)
-- `${SERVICE_ID}-latest` - Latest build for the service
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (admin/admin)
 
-### 7. **Deploy** (2 jobs)
-- `deploy:pre-check` - Verifies dependencies (PostgreSQL, Redis, Event Bus)
-- `deploy:development` - Deploys to GKE development environment
+## Configuration
 
-**Pre-deployment checks ensure:**
-- PostgreSQL is reachable
-- Redis is accessible
-- Event Bus connectivity (warning only)
+### Environment Variables
 
-### 8. **Smoke Test** (1 job)
-- `smoke-test:api-health` - Tests all API endpoints:
-  - `/actuator/health`
-  - `/api/auth/register`
-  - `/api/auth/login`
-  - `/api/auth/refresh`
-  - `/api/users`
-  - `/api/users/{id}`
-  - `/api/users/preferences`
-  - `/api/users/emergency-access`
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SPRING_PROFILES_ACTIVE` | Active Spring profile | `dev` |
+| `SERVER_PORT` | Application port | `8080` |
+| `DB_HOST` | Database host | `localhost` |
+| `DB_PORT` | Database port | `5432` |
+| `DB_NAME` | Database name | `auth_service` |
+| `DB_USERNAME` | Database username | `auth_user` |
+| `DB_PASSWORD` | Database password | `changeme` |
+| `JWT_SECRET` | JWT signing secret (256-bit) | Required |
+| `JWT_EXPIRATION` | Access token expiration (ms) | `86400000` |
+| `AUTH0_ENABLED` | Enable Auth0 integration | `false` |
+| `AUTH0_DOMAIN` | Auth0 domain | - |
+| `KEYCLOAK_ENABLED` | Enable Keycloak integration | `false` |
+| `KEYCLOAK_AUTH_SERVER_URL` | Keycloak server URL | - |
+| `REDIS_HOST` | Redis host | `localhost` |
 
-### 9. **Notify** (2 jobs)
-- `notify:success` - Sends success notification to Slack
-- `notify:failure` - Sends failure notification to Slack/Email
+See `.env.example` for complete list.
 
----
+### Profiles
 
-## 🔐 Security Features
+- `dev`: Development profile with debug logging
+- `prod`: Production profile with optimized settings
+- `test`: Testing profile with H2 database
 
-### 1. **Secrets Management**
-- All secrets stored as GitLab CI/CD variables
-- Sensitive values marked as "Masked" in logs
-- Secrets injected as Kubernetes secrets at deployment
+## API Documentation
 
-### 2. **Multi-Layer Security Scanning**
-- **SAST:** SonarCloud static analysis
-- **SCA:** Snyk dependency scanning
-- **Container Scanning:** Trivy image scanning
-- **OWASP:** Dependency-Check for known CVEs
+### Authentication Endpoints
 
-### 3. **Runtime Security**
-- Non-root container user (UID 1001)
-- Read-only root filesystem capability
-- Resource limits enforced
-- Network policies (recommended to add)
+#### Register User
+```http
+POST /api/v1/auth/register
+Content-Type: application/json
 
-### 4. **Access Control**
-- Protected branches for main/develop
-- Manual approval for production deployments
-- Audit logging enabled
+{
+  "username": "johndoe",
+  "email": "john.doe@example.com",
+  "password": "SecurePassword123!",
+  "firstName": "John",
+  "lastName": "Doe"
+}
+```
 
----
+**Response:**
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "tokenType": "Bearer",
+  "expiresIn": 3600,
+  "user": {
+    "id": "123e4567-e89b-12d3-a456-426614174000",
+    "username": "johndoe",
+    "email": "john.doe@example.com",
+    "roles": ["USER"],
+    "permissions": []
+  }
+}
+```
 
-## 📊 Monitoring & Observability
+#### Login
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
 
-### Test Reports
-- JUnit test results visible in GitLab Merge Requests
-- Code coverage reports in SonarCloud
-- Vulnerability reports in Snyk dashboard
+{
+  "usernameOrEmail": "johndoe",
+  "password": "SecurePassword123!"
+}
+```
+
+#### Refresh Token
+```http
+POST /api/v1/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+#### Logout
+```http
+POST /api/v1/auth/logout
+Authorization: Bearer {accessToken}
+```
+
+#### Get Current User
+```http
+GET /api/v1/auth/me
+Authorization: Bearer {accessToken}
+```
+
+### Using the Access Token
+
+Include the access token in the Authorization header:
+```http
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+## Database Schema
+
+### Tables
+
+- **users**: User accounts and authentication data
+- **roles**: Role definitions
+- **permissions**: Permission definitions
+- **user_roles**: User-role associations
+- **role_permissions**: Role-permission associations
+- **refresh_tokens**: Active refresh tokens
+- **audit_logs**: Audit trail of authentication events
+
+### Default Data
+
+The service initializes with:
+- **Roles**: USER, ADMIN, MODERATOR
+- **Admin User**:
+  - Username: `admin`
+  - Password: `Admin123!`
+  - Email: `admin@example.com`
+
+## Security Features
+
+### Password Requirements
+
+- Minimum 8 characters
+- At least one uppercase letter
+- At least one lowercase letter
+- At least one digit
+- At least one special character (@$!%*?&)
+
+### Account Security
+
+- Failed login tracking (locks after 5 attempts)
+- Password expiration tracking
+- Email verification support
+- Account status management
+
+### Token Management
+
+- Short-lived access tokens (default: 24 hours)
+- Long-lived refresh tokens (default: 7 days)
+- Token revocation on logout
+- Automatic cleanup of expired tokens
+
+## Monitoring and Observability
 
 ### Health Checks
-- Liveness probe: `/actuator/health/liveness`
-- Readiness probe: `/actuator/health/readiness`
-- Startup probe with 150s timeout
 
-### Logs & Metrics
-- Application logs: `kubectl logs -n development -l app=user-management-service`
-- Metrics: Spring Boot Actuator metrics endpoint
-- GKE monitoring: GCP Console
-
----
-
-## 🎯 API Endpoints
-
-The service exposes the following endpoints:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/auth/register` | POST | User registration |
-| `/api/auth/login` | POST | User authentication |
-| `/api/auth/refresh` | POST | JWT token refresh |
-| `/api/users` | GET | List all users (authenticated) |
-| `/api/users/{id}` | GET | Get user by ID (authenticated) |
-| `/api/users/preferences` | GET/PUT | User accessibility preferences |
-| `/api/users/emergency-access` | POST | Emergency access management |
-| `/actuator/health` | GET | Health check endpoint |
-
----
-
-## 🔧 Configuration
-
-### Maven Settings
-
-The pipeline uses these Maven configurations:
 ```bash
-MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
-MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version"
+# Application health
+curl http://localhost:8080/actuator/health
+
+# Liveness probe
+curl http://localhost:8080/actuator/health/liveness
+
+# Readiness probe
+curl http://localhost:8080/actuator/health/readiness
 ```
 
-### Spring Profiles
+### Metrics
 
-- **test:** Used for unit tests
-- **integration-test:** Used for integration tests
-- **development:** Deployed to dev environment
-- **staging:** (Optional) Staging environment
-- **production:** (Optional) Production environment
+Prometheus metrics available at: http://localhost:8080/actuator/prometheus
 
-### Resource Allocation
+Key metrics:
+- `http_server_requests_seconds`: Request duration
+- `jvm_memory_used_bytes`: JVM memory usage
+- `system_cpu_usage`: CPU usage
+- Custom business metrics
 
-**Development Environment:**
-- Replicas: 3
-- CPU Request: 250m
-- CPU Limit: 1000m
-- Memory Request: 512Mi
-- Memory Limit: 2Gi
+### Logging
 
-**Autoscaling:**
-- Min Replicas: 3
-- Max Replicas: 10
-- CPU Threshold: 70%
-- Memory Threshold: 80%
+Structured JSON logging with correlation IDs for request tracing.
 
----
+Log levels:
+- `ERROR`: Critical errors requiring attention
+- `WARN`: Warning conditions
+- `INFO`: Informational messages
+- `DEBUG`: Debug information (dev profile only)
 
-## 🐛 Troubleshooting
+## Testing
 
-### Pipeline Fails at Build Stage
+### Run All Tests
+```bash
+mvn test
+```
 
-**Symptoms:** Maven compilation errors
-**Solutions:**
-1. Check Java version compatibility (requires JDK 17)
-2. Verify `pom.xml` dependencies
-3. Review Maven cache - may need to clear
+### Run Specific Test Class
+```bash
+mvn test -Dtest=AuthServiceTest
+```
 
-### Database Connection Fails in Tests
+### Run Integration Tests
+```bash
+mvn verify
+```
 
-**Symptoms:** Connection refused errors
-**Solutions:**
-1. Verify PostgreSQL service is running in `.gitlab-ci.yml`
-2. Check `DATABASE_URL` environment variable
-3. Ensure service alias matches hostname
+### Test Coverage
+```bash
+mvn jacoco:report
+# Report: target/site/jacoco/index.html
+```
 
-### Deployment Fails - Pre-check Error
+## Deployment
 
-**Symptoms:** "PostgreSQL/Redis is not reachable"
-**Solutions:**
-1. Verify CI/CD variables are set correctly
-2. Check network connectivity from GKE to databases
-3. Validate database credentials
-4. Check firewall rules
+### Building for Production
 
-### Smoke Tests Fail
+```bash
+mvn clean package -Pprod
+```
 
-**Symptoms:** HTTP timeouts or connection errors
-**Solutions:**
-1. Increase sleep time in smoke test (default 30s)
-2. Verify `DEPLOYMENT_URL` variable
-3. Check LoadBalancer/Ingress configuration
-4. Review pod status: `kubectl get pods -n development`
+### Docker Build
 
-### Snyk/Trivy Fails Pipeline
+```bash
+docker build -t auth-service:latest .
+```
 
-**Symptoms:** Security scans find HIGH/CRITICAL vulnerabilities
-**Solutions:**
-1. Review vulnerability reports
-2. Update dependencies to patched versions
-3. Add suppressions to `dependency-check-suppression.xml` for false positives
-4. Temporarily set `allow_failure: true` (not recommended for prod)
+### Kubernetes Deployment
 
----
+Example Kubernetes manifests are available in the `k8s/` directory (create if needed).
 
-## 🚦 Branch Strategy
+Key considerations:
+- Use Kubernetes Secrets for sensitive data
+- Configure resource limits and requests
+- Set up horizontal pod autoscaling
+- Configure persistent volumes for PostgreSQL
+- Use ingress for external access
 
-### Development (`develop` branch)
-- Auto-deploys to development environment
-- All security scans enabled
-- Full test suite execution
+## CI/CD Integration
 
-### Main (`main` branch)
-- Auto-deploys to development
-- Can be configured for staging deployment
-- Production deployment requires manual trigger
+### GitHub Actions Example
 
-### Feature Branches
-- Runs tests and security scans
-- Does not deploy
-- Creates merge request pipeline
+```yaml
+name: CI/CD
 
-### Tags (e.g., `v1.2.3`)
-- Recommended for production releases
-- Configure production deployment job to trigger on tags
+on: [push, pull_request]
 
----
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up JDK 17
+        uses: actions/setup-java@v2
+        with:
+          java-version: '17'
+      - name: Build with Maven
+        run: mvn clean package
+      - name: Run tests
+        run: mvn test
+      - name: Build Docker image
+        run: docker build -t auth-service:${{ github.sha }} .
+```
 
-## 📚 Additional Documentation
+## OAuth 2.0 Integration
 
-- **[CICD-SETUP-GUIDE.md](CICD-SETUP-GUIDE.md)** - Complete setup guide with detailed instructions
-- **[GITLAB-VARIABLES-QUICK-REF.md](GITLAB-VARIABLES-QUICK-REF.md)** - Quick reference for CI/CD variables
-- **[dependency-check-suppression.xml](dependency-check-suppression.xml)** - OWASP vulnerability suppressions
+### Auth0 Setup
 
----
+1. Create an Auth0 application
+2. Configure environment variables:
+```bash
+AUTH0_ENABLED=true
+AUTH0_DOMAIN=your-domain.auth0.com
+AUTH0_CLIENT_ID=your-client-id
+AUTH0_CLIENT_SECRET=your-client-secret
+AUTH0_AUDIENCE=your-api-identifier
+```
 
-## 🤝 Contributing
+### Keycloak Setup
 
-### Before Submitting Code
+1. Create a Keycloak realm
+2. Create a client in the realm
+3. Configure environment variables:
+```bash
+KEYCLOAK_ENABLED=true
+KEYCLOAK_AUTH_SERVER_URL=http://localhost:8180
+KEYCLOAK_REALM=auth-service
+KEYCLOAK_CLIENT_ID=auth-service-client
+KEYCLOAK_CLIENT_SECRET=your-client-secret
+```
 
-1. Run tests locally:
-   ```bash
-   mvn clean verify
-   ```
+## Troubleshooting
 
-2. Check code formatting:
-   ```bash
-   mvn spotless:check
-   ```
+### Database Connection Issues
 
-3. Ensure no security vulnerabilities:
-   ```bash
-   mvn org.owasp:dependency-check-maven:check
-   ```
+```bash
+# Check PostgreSQL is running
+docker-compose ps postgres
 
-### Merge Request Checklist
+# View PostgreSQL logs
+docker-compose logs postgres
 
-- [ ] All tests pass
-- [ ] Code coverage > 80%
-- [ ] No critical security vulnerabilities
-- [ ] Documentation updated
-- [ ] Commit messages follow convention
+# Connect to database
+docker-compose exec postgres psql -U auth_user -d auth_service
+```
 
----
+### Redis Connection Issues
 
-## 📞 Support
+```bash
+# Check Redis is running
+docker-compose ps redis
 
-**DevOps Team:**
-- Email: devops-team@example.com
-- Slack: #devops-support
-- On-call: PagerDuty rotation
+# Test Redis connection
+docker-compose exec redis redis-cli ping
+```
 
-**Security Issues:**
-- Report to: security@example.com
-- Use GitLab confidential issues
+### Application Logs
 
----
+```bash
+# View application logs
+docker-compose logs -f auth-service
 
-## 📜 License
+# View last 100 lines
+docker-compose logs --tail=100 auth-service
+```
 
-Proprietary - Internal Use Only
+## Performance Tuning
 
----
+### JVM Options
 
-## 🎉 Acknowledgments
+```bash
+# Adjust heap size
+JAVA_OPTS="-Xms512m -Xmx2g"
 
-Built by the DevOps team for the Medication Management System project.
+# Enable G1GC
+JAVA_OPTS="-XX:+UseG1GC"
 
-**Pipeline Version:** 1.0
-**Last Updated:** 2026-01-12
-**Service ID:** SVC-001
-**Service Name:** User Management Service
+# Container support
+JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+```
 
----
+### Database Connection Pool
 
-## 🔄 Version History
+Adjust in `application.yml`:
+```yaml
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+```
 
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0 | 2026-01-12 | Initial production-grade pipeline |
+## Contributing
 
----
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
-**Ready to deploy?** Follow the [CICD-SETUP-GUIDE.md](CICD-SETUP-GUIDE.md) for step-by-step instructions!
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Support
+
+For issues and questions:
+- GitHub Issues: [Create an issue]
+- Documentation: See `/docs` directory
+- API Documentation: http://localhost:8080/swagger-ui.html
+
+## Changelog
+
+### Version 1.0.0
+- Initial release
+- JWT authentication
+- OAuth 2.0 support (Auth0, Keycloak)
+- Role-based access control
+- Audit logging
+- Docker support
+- Comprehensive testing

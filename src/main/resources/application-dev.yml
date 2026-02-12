@@ -1,0 +1,19 @@
+spring:
+  jpa:
+    show-sql: true
+
+  flyway:
+    clean-disabled: false
+
+logging:
+  level:
+    root: INFO
+    com.enterprise.authservice: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"

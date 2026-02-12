@@ -1,0 +1,27 @@
+spring:
+  jpa:
+    show-sql: false
+
+  flyway:
+    clean-disabled: true
+
+logging:
+  level:
+    root: WARN
+    com.enterprise.authservice: INFO
+    org.springframework.web: WARN
+    org.springframework.security: WARN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+
+server:
+  error:
+    include-stacktrace: never
+    include-exception: false
